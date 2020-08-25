@@ -13,7 +13,8 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-
+# 发现它不仅MultiheadAttention做了改动，transformer也改动了，因此直接引用还不够，转置lite transformer
+# from .multihead_attention import MultiheadAttention
 """
 1、通过Decoder和Encoder的实现可以发现，作者极力强调位置嵌入的作用，每次在self-attention操作时都伴随着position embedding，
 因为Transformer本身是permute invariant，即对排列和位置是不care的，而我们很清楚，在detection任务中，位置信息有着举足轻重的地位！
@@ -121,7 +122,7 @@ class TransformerDecoder(nn.Module):
         self.layers = _get_clones(decoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
-        # 是否需要记录中间每层的结果
+        # 是否需要记录中间每层的结果（比原来的transformer新增的）
         self.return_intermediate = return_intermediate
 
     def forward(self, tgt, memory,
@@ -164,7 +165,7 @@ class TransformerDecoder(nn.Module):
 
         if self.return_intermediate:
             return torch.stack(intermediate)
-
+        # 原版transformer没有这个.unsqueeze(0)
         return output.unsqueeze(0)
 
 """
@@ -178,6 +179,7 @@ class TransformerEncoderLayer(nn.Module):
         super().__init__()
         # 多头自注意力层
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        # self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         # 前向反馈层FNN
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -227,7 +229,7 @@ class TransformerEncoderLayer(nn.Module):
                     pos: Optional[Tensor] = None):
         # 输入多头自注意力层和前向反馈层前先进行归一化
         src2 = self.norm1(src)
-        # 在输入多头自注意力层时需要先进行位置嵌入，即结合位置编码。
+        # 在输入多头自注意力层时需要先进行位置嵌入，即结合位置编码。（这个与原版的不太一样，原版没有这个）
         q = k = self.with_pos_embed(src2, pos)
         # self.self_attn是nn.MultiheadAttention的实例，其前向过程返回两部分，第一个是自注意力层的输出，第二个是自注意力权重，因此可以看到这里取了输出索引为0的部分。
         # key_padding_mask对应上述Encoder的src_key_padding_mask，是backbone最后一层输出特征图对应的mask，值为True的那些部分是原始图像padding的部分，在生成注意力
@@ -259,9 +261,11 @@ class TransformerDecoderLayer(nn.Module):
         super().__init__()
         # 多头自注意力层
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        # self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
         # Encoder-Decoder Layer（DecoderLayer与Encoder的实现类似，只不过多了一层 Encoder-Decoder Layer，
         # 其实质也是多头自注意力层，但是key和value来自于Encoder的输出。）
         self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        # self.multihead_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
         # Implementation of Feedforward model
         # 前向反馈FFN
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -288,7 +292,7 @@ class TransformerDecoderLayer(nn.Module):
                      memory_key_padding_mask: Optional[Tensor] = None,
                      pos: Optional[Tensor] = None,
                      query_pos: Optional[Tensor] = None):
-        # 首先进行位置嵌入
+        # 首先进行位置嵌入（这个与原版的不太一样，原版没有这个）
         q = k = self.with_pos_embed(tgt, query_pos)
         # 多头自注意力层，输入参数不包含Encoder的输出（在第一个多头自注意层中，输入均和Encoder无关。）
         tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
